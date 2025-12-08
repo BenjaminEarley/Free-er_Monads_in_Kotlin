@@ -2,6 +2,7 @@ package effects
 
 import Effect
 import Program
+import flatMap
 import interpret
 import perform
 
@@ -9,10 +10,13 @@ fun <A> Program<A>.runFraudCheck(): Program<A> =
     interpret<FraudCheck<*>, A> { op, resume ->
         when (op) {
             is VerifyTransaction -> {
-                // Mock logic: Transactions over 5000 are suspicious
                 val isSus = op.amount > 5000.0
-                if (isSus) println("[FraudAPI] ⚠️ Flagging transaction for review...")
-                resume(isSus)
+                if (isSus) {
+                    perform(Log("WARN", "Flagging transaction for review..."))
+                        .flatMap { resume(isSus) }
+                } else {
+                    resume(isSus)
+                }
             }
         }
     }

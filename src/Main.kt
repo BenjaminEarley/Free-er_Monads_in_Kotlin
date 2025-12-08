@@ -30,6 +30,7 @@ fun main() {
             .runLogger() // Handle Log requests
             .runSafe() // Handle Errors (Outer layer catches exceptions)
 
+    assert(result1 is Program.Done)
     runInterpreter(result1)
 
     println("\n--- Database State After Tx 1 ---")
@@ -45,6 +46,7 @@ fun main() {
             .runLogger()
             .runSafe()
 
+    assert(result2 is Program.Done)
     runInterpreter(result2)
 
     println("\n--- Scenario 3: Fraud Detection ---")
@@ -57,6 +59,7 @@ fun main() {
             .runLogger()
             .runSafe()
 
+    assert(result3 is Program.Done)
     runInterpreter(result3)
 }
 
