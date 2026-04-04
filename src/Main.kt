@@ -12,6 +12,7 @@ import effects.runKVStore
 import effects.runKVStoreAsync
 import effects.runLogger
 import effects.runSafe
+import java.nio.DoubleBuffer
 
 fun main() {
     // Initial State
@@ -71,7 +72,7 @@ fun main() {
     // Scenario 4: Same program, but KVStore handled via IO effects (async-capable)
     println("\n--- Scenario 4: Async KVStore via IO Effect ---")
     val asyncDatabase =
-        mutableMapOf<String, Any?>(
+        mutableMapOf(
             "Alice" to 1000.0,
             "Bob" to 50.0,
         )

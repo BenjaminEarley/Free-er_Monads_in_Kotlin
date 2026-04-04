@@ -22,7 +22,7 @@ fun <V, A> Program<A>.runKVStore(data: MutableMap<String, V>): Program<A> =
         }
     }
 
-fun <A> Program<A>.runKVStoreAsync(data: MutableMap<String, Any?>): Program<A> =
+fun <V, A> Program<A>.runKVStoreAsync(data: MutableMap<String, V>): Program<A> =
     interpret<KVStore<*>, A> { op, resume ->
         when (op) {
             is Get<*> -> {
@@ -40,7 +40,7 @@ fun <A> Program<A>.runKVStoreAsync(data: MutableMap<String, Any?>): Program<A> =
                 program {
                     performIO {
                         println("  [IO] Writing key: ${op.key} = ${op.value}")
-                        data[op.key] = op.value
+                        data[op.key] = op.value as V
                     }.bind()
                     resume(Unit).bind()
                 }
