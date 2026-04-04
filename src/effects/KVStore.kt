@@ -1,50 +1,33 @@
+@file:Suppress("UNCHECKED_CAST")
+
 package effects
 
 import Effect
 import Program
-import interpose
-import interpret
+import handle
+import intercept
 import perform
-import program
 
 fun <V, A> Program<A>.runKVStore(data: MutableMap<String, V>): Program<A> =
-    interpret<KVStore<*>, A> { op, resume ->
+    handle<KVStore<*>, A> { op ->
         when (op) {
-            is Get<*> -> {
-                val valFromDb = data[op.key] ?: op.default
-                resume(valFromDb)
-            }
-
-            is Put<*> -> {
-                data[op.key] = op.value as V
-                resume(Unit)
-            }
+            is Get<*> -> data[op.key] ?: op.default
+            is Put<*> -> { data[op.key] = op.value as V }
         }
     }
 
 fun <V, A> Program<A>.runKVStoreAsync(data: MutableMap<String, V>): Program<A> =
-    interpret<KVStore<*>, A> { op, resume ->
+    handle<KVStore<*>, A> { op ->
         when (op) {
-            is Get<*> -> {
-                program {
-                    val value =
-                        performIO {
-                            println("  [IO] Reading key: ${op.key}")
-                            data[op.key] ?: op.default
-                        }.bind()
-                    resume(value).bind()
-                }
-            }
+            is Get<*> -> performIO {
+                println("  [IO] Reading key: ${op.key}")
+                data[op.key] ?: op.default
+            }.bind()
 
-            is Put<*> -> {
-                program {
-                    performIO {
-                        println("  [IO] Writing key: ${op.key} = ${op.value}")
-                        data[op.key] = op.value as V
-                    }.bind()
-                    resume(Unit).bind()
-                }
-            }
+            is Put<*> -> performIO {
+                println("  [IO] Writing key: ${op.key} = ${op.value}")
+                data[op.key] = op.value as V
+            }.bind()
         }
     }
 
@@ -61,22 +44,16 @@ data class Put<T>(
 ) : KVStore<Unit>
 
 fun <A> Program<A>.auditKVStore(): Program<A> =
-    interpose<KVStore<*>, A> { op, resume ->
+    intercept<KVStore<*>, A> { op ->
         when (op) {
             is Get<*> -> {
-                program {
-                    perform(Log("AUDIT", "GET ${op.key}")).bind()
-                    val result = perform(op).bind()
-                    resume(result).bind()
-                }
+                perform(Log("AUDIT", "GET ${op.key}")).bind()
+                perform(op).bind()
             }
 
             is Put<*> -> {
-                program {
-                    perform(Log("AUDIT", "PUT ${op.key} = ${op.value}")).bind()
-                    perform(op).bind()
-                    resume(Unit).bind()
-                }
+                perform(Log("AUDIT", "PUT ${op.key} = ${op.value}")).bind()
+                perform(op).bind()
             }
         }
     }

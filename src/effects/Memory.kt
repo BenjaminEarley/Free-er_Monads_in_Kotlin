@@ -2,14 +2,14 @@ package effects
 
 import Effect
 import Program
-import interpretS
+import handleS
 import perform
 
 fun <A> Program<A>.runMemory(initialState: Int): Program<A> =
-    interpretS<Memory<*>, Int, A>(initialState) { s, op, resume ->
+    handleS<Memory<*>, Int, A>(initialState) { s, op ->
         when (op) {
-            is Recall -> resume(s, s) // return current state, state unchanged
-            is Memorize -> resume(op.value, Unit) // state becomes op.value, return Unit
+            is Recall -> s to s              // state unchanged, return state
+            is Memorize -> op.value to Unit  // new state, return Unit
         }
     }
 
