@@ -33,11 +33,11 @@ The `program { }` block uses `.bind()` to sequence effects. Api inspired by Arro
 ### 3. Handle the effects
 
 ```kotlin
-fun <A> Program<A>.runConsole(): Program<A> =
+fun <A> Program<A>.console(): Program<A> =
     handle<Console<*>, A> { op ->
         when (op) {
-            is Print -> kotlin.io.println(op.msg)
-            is ReadLine -> { kotlin.io.print(op.prompt); kotlin.io.readLine()!! }
+            is Print -> println(op.msg)
+            is ReadLine -> { print(op.prompt); readLine()!! }
         }
     }
 ```
@@ -48,7 +48,7 @@ The `handle` DSL auto-resumes with the block's return value. For effects that re
 
 ```kotlin
 val name: String = greeter
-    .runConsole()
+    .console()
     .runOrThrow()  // extracts the value, or fails naming the unhandled effect
 ```
 
