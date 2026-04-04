@@ -44,4 +44,4 @@ suspend fun <A> Program<A>.runIO(): Program<A> {
     }
 }
 
-fun <A> Program<A>.runIOBlocking(): Program<A> = runBlocking { runIO() }
+fun <A> Program<A>.ioBlocking(): Program<A> = runBlocking { runIO() }

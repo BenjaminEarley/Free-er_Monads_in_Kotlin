@@ -5,7 +5,7 @@ import Program
 import interpret
 import perform
 
-fun <A> Program<A>.runSafe(): Program<Result<A>> =
+fun <A> Program<A>.raise(): Program<Result<A>> =
     interpret<Error<*>, A, Result<A>>(
         transformDone = { value -> Program.Done(Result.success(value)) },
         rule = { op, _ ->

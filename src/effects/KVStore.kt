@@ -8,26 +8,35 @@ import handle
 import intercept
 import perform
 
-fun <V, A> Program<A>.runKVStore(data: MutableMap<String, V>): Program<A> =
+fun <V, A> Program<A>.kvStore(data: MutableMap<String, V>): Program<A> =
     handle<KVStore<*>, A> { op ->
         when (op) {
-            is Get<*> -> data[op.key] ?: op.default
-            is Put<*> -> { data[op.key] = op.value as V }
+            is Get<*> -> {
+                data[op.key] ?: op.default
+            }
+
+            is Put<*> -> {
+                data[op.key] = op.value as V
+            }
         }
     }
 
 fun <V, A> Program<A>.runKVStoreAsync(data: MutableMap<String, V>): Program<A> =
     handle<KVStore<*>, A> { op ->
         when (op) {
-            is Get<*> -> performIO {
-                println("  [IO] Reading key: ${op.key}")
-                data[op.key] ?: op.default
-            }.bind()
+            is Get<*> -> {
+                performIO {
+                    println("  [IO] Reading key: ${op.key}")
+                    data[op.key] ?: op.default
+                }.bind()
+            }
 
-            is Put<*> -> performIO {
-                println("  [IO] Writing key: ${op.key} = ${op.value}")
-                data[op.key] = op.value as V
-            }.bind()
+            is Put<*> -> {
+                performIO {
+                    println("  [IO] Writing key: ${op.key} = ${op.value}")
+                    data[op.key] = op.value as V
+                }.bind()
+            }
         }
     }
 

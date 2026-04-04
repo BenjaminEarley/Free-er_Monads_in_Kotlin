@@ -8,8 +8,10 @@ import perform
 fun <A> Program<A>.runMemory(initialState: Int): Program<A> =
     handleS<Memory<*>, Int, A>(initialState) { s, op ->
         when (op) {
-            is Recall -> s to s              // state unchanged, return state
-            is Memorize -> op.value to Unit  // new state, return Unit
+            is Recall -> s to s
+
+            // state unchanged, return state
+            is Memorize -> op.value to Unit // new state, return Unit
         }
     }
 

@@ -7,7 +7,7 @@ import intercept
 import perform
 
 // Pure handler: just decides if the transaction is fraudulent
-fun <A> Program<A>.runFraudCheck(): Program<A> =
+fun <A> Program<A>.fraudCheck(): Program<A> =
     handle<FraudCheck<*>, A> { op ->
         when (op) {
             is VerifyTransaction -> op.amount > 5000.0

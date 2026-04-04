@@ -1,18 +1,17 @@
 import effects.auditFraudCheck
 import effects.auditKVStore
 import effects.fail
+import effects.fraudCheck
 import effects.get
+import effects.ioBlocking
 import effects.isFraudulent
+import effects.kvStore
 import effects.logError
 import effects.logInfo
+import effects.logger
 import effects.put
-import effects.runFraudCheck
-import effects.runIOBlocking
-import effects.runKVStore
+import effects.raise
 import effects.runKVStoreAsync
-import effects.runLogger
-import effects.runSafe
-import java.nio.DoubleBuffer
 
 fun main() {
     // Initial State
@@ -28,18 +27,17 @@ fun main() {
     val programSuccess = transferMoney("Alice", "Bob", 100.0)
 
     // Composition: Safe( Logger( Fraud( DB( Audit( Program ) ) ) ) )
-    val result1 =
+    val result1: Result<String> =
         programSuccess
             .auditKVStore() // Middleware: log every DB op, re-emit for real handler
             .auditFraudCheck() // Middleware: log suspicious transactions, re-emit
-            .runKVStore(database) // Handler: execute DB operations
-            .runFraudCheck() // Handler: decide fraud logic
-            .runLogger() // Handler: print all logs (including audit logs)
-            .runSafe() // Handler: catch errors
+            .kvStore(database) // Handler: execute DB operations
+            .fraudCheck() // Handler: decide fraud logic
+            .logger() // Handler: print all logs (including audit logs)
+            .raise() // Handler: catch errors
+            .runOrThrow()
 
-    assert(result1 is Program.Done)
-    runInterpreter(result1)
-
+    println(result1)
     println("\n--- Database State After Tx 1 ---")
     println(database)
 
@@ -48,26 +46,29 @@ fun main() {
 
     val result2 =
         programFail
-            .runKVStore(database)
-            .runFraudCheck()
-            .runLogger()
-            .runSafe()
+            .auditKVStore()
+            .auditFraudCheck()
+            .kvStore(database)
+            .fraudCheck()
+            .logger()
+            .raise()
+            .runOrThrow()
 
-    assert(result2 is Program.Done)
-    runInterpreter(result2)
-
+    println(result2)
     println("\n--- Scenario 3: Fraud Detection ---")
     val programFraud = transferMoney("Alice", "Bob", 6000.0)
 
     val result3 =
         programFraud
-            .runKVStore(database)
-            .runFraudCheck()
-            .runLogger()
-            .runSafe()
+            .auditKVStore()
+            .auditFraudCheck()
+            .kvStore(database)
+            .fraudCheck()
+            .logger()
+            .raise()
+            .runOrThrow()
 
-    assert(result3 is Program.Done)
-    runInterpreter(result3)
+    println(result3)
 
     // Scenario 4: Same program, but KVStore handled via IO effects (async-capable)
     println("\n--- Scenario 4: Async KVStore via IO Effect ---")
@@ -79,15 +80,18 @@ fun main() {
 
     val result4 =
         transferMoney("Alice", "Bob", 100.0)
-            .runKVStoreAsync(asyncDatabase) // Pure interpret: replaces KVStore with IO effects
-            .runFraudCheck()
-            .runLogger()
-            .runSafe()
-            .runIOBlocking() // Handles all IO effects at the edge
+            .auditKVStore()
+            .auditFraudCheck()
+            .runKVStoreAsync(asyncDatabase) // KVStore with IO effects
+            .kvStore(database)
+            .fraudCheck()
+            .logger()
+            .raise()
+            .ioBlocking() // Handles all IO effects at the edge
+            .runOrThrow()
 
-    assert(result4 is Program.Done)
-    runInterpreter(result4)
-    println("\nAsync Database State: $asyncDatabase")
+    println(result4)
+    println("Async Database State: $asyncDatabase")
 }
 
 fun transferMoney(
@@ -120,3 +124,9 @@ fun transferMoney(
         logInfo("Success: Transferred $$amount. New Balance $from: $${balance - amount}").bind()
         "TX_OK"
     }
+
+private fun println(result: Result<String>) =
+    result.fold(
+        onSuccess = { println(">> Final Result: $it") },
+        onFailure = { println(">> Pipeline Failed: ${it.message}") },
+    )

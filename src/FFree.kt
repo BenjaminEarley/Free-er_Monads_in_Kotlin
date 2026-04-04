@@ -53,21 +53,16 @@ inline fun <reified E : Effect<*>, A> Program<A>.interpose(noinline rule: (E, (E
         rule = rule,
     )
 
-// Execute the final program
-fun <A> runInterpreter(program: Program<Result<A>>) {
-    when (program) {
+fun <A> Program<A>.runOrThrow(): A =
+    when (this) {
         is Program.Done -> {
-            program.value.fold(
-                onSuccess = { println(">> Final Result: $it") },
-                onFailure = { println(">> Pipeline Failed: ${it.message}") },
-            )
+            this.value
         }
 
         is Program.Suspended<*, *> -> {
-            println("!! Logic Error: Unhandled effects remain !!")
+            error("Unhandled effect: ${this.effect::class.simpleName}")
         }
     }
-}
 
 // The "Fast Type-Aligned Queue"
 // https://okmij.org/ftp/Haskell/Reflection.html

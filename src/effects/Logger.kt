@@ -5,7 +5,7 @@ import Program
 import handle
 import perform
 
-fun <A> Program<A>.runLogger(): Program<A> =
+fun <A> Program<A>.logger(): Program<A> =
     handle<Logger<*>, A> { op ->
         when (op) {
             is Log -> {
