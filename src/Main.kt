@@ -26,7 +26,6 @@ fun main() {
     println("--- Scenario 1: Successful Transfer ---")
     val programSuccess = transferMoney("Alice", "Bob", 100.0)
 
-    // Composition: Safe( Logger( Fraud( DB( Audit( Program ) ) ) ) )
     val result1: Result<String> =
         programSuccess
             .auditKVStore() // Middleware: log every DB op, re-emit for real handler
@@ -70,7 +69,6 @@ fun main() {
 
     println(result3)
 
-    // Scenario 4: Same program, but KVStore handled via IO effects (async-capable)
     println("\n--- Scenario 4: Async KVStore via IO Effect ---")
     val asyncDatabase =
         mutableMapOf(
