@@ -71,31 +71,28 @@ fun transferMoney(
     from: String,
     to: String,
     amount: Double,
-): Program<String> =
-    logInfo("Request: Transfer $$amount from $from to $to")
-        .flatMap {
-            // 1. Security Check (External API)
-            isFraudulent(amount, from)
-        }.flatMap { isRisk ->
-            if (isRisk) {
-                fail("Security Alert: Fraud detected for account $from")
-            } else {
-                // 2. Read Source Balance (Database)
-                get(from, 0.0)
-            }
-        }.flatMap { balance ->
-            if (balance < amount) {
-                // 3. Validation Logic
-                logError("Insufficient funds in $from")
-                    .flatMap { fail("Insufficient funds") }
-            } else {
-                // 4. Update Balances (Transactional Write)
-                put(from, balance - amount)
-                    .flatMap { get(to, 0.0) }
-                    .flatMap { targetBal -> put(to, targetBal + amount) }
-                    .flatMap {
-                        logInfo("Success: Transferred $$amount. New Balance $from: $${balance - amount}")
-                            .map { "TX_OK" }
-                    }
-            }
-        }
+): Program<String> = program {
+    logInfo("Request: Transfer $$amount from $from to $to").bind()
+
+    // 1. Security Check (External API)
+    val isRisk = isFraudulent(amount, from).bind()
+    if (isRisk) {
+        fail("Security Alert: Fraud detected for account $from").bind()
+    }
+
+    // 2. Read Source Balance (Database)
+    val balance = get(from, 0.0).bind()
+
+    if (balance < amount) {
+        // 3. Validation Logic
+        logError("Insufficient funds in $from").bind()
+        fail("Insufficient funds").bind()
+    }
+
+    // 4. Update Balances (Transactional Write)
+    put(from, balance - amount).bind()
+    val targetBal = get(to, 0.0).bind()
+    put(to, targetBal + amount).bind()
+    logInfo("Success: Transferred $$amount. New Balance $from: $${balance - amount}").bind()
+    "TX_OK"
+}
