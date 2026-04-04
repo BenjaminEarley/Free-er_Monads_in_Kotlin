@@ -3,8 +3,8 @@ package effects
 import Effect
 import Program
 import flatMap
-import interpret
 import interpose
+import interpret
 import perform
 
 // Pure handler: just decides if the transaction is fraudulent
@@ -19,7 +19,7 @@ fun <A> Program<A>.runFraudCheck(): Program<A> =
 fun <A> Program<A>.auditFraudCheck(): Program<A> =
     interpose<FraudCheck<*>, A> { op, resume ->
         when (op) {
-            is VerifyTransaction ->
+            is VerifyTransaction -> {
                 perform(op).flatMap { isSus ->
                     if (isSus) {
                         perform(Log("WARN", "Flagging transaction for review..."))
@@ -28,6 +28,7 @@ fun <A> Program<A>.auditFraudCheck(): Program<A> =
                         resume(isSus)
                     }
                 }
+            }
         }
     }
 

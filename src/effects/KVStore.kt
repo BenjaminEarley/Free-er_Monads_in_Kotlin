@@ -22,6 +22,25 @@ fun <V, A> Program<A>.runKVStore(data: MutableMap<String, V>): Program<A> =
         }
     }
 
+fun <A> Program<A>.runKVStoreAsync(data: MutableMap<String, Any?>): Program<A> =
+    interpret<KVStore<*>, A> { op, resume ->
+        when (op) {
+            is Get<*> -> {
+                performIO {
+                    println("  [IO] Reading key: ${op.key}")
+                    data[op.key] ?: op.default
+                }.flatMap { resume(it) }
+            }
+
+            is Put<*> -> {
+                performIO {
+                    println("  [IO] Writing key: ${op.key} = ${op.value}")
+                    data[op.key] = op.value
+                }.flatMap { resume(Unit) }
+            }
+        }
+    }
+
 sealed interface KVStore<out R> : Effect<R>
 
 data class Get<T>(
