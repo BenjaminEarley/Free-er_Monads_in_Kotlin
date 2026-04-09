@@ -106,7 +106,14 @@ fun <A, B> Program<A>.flatMap(f: (A) -> Program<B>): Program<B> =
         }
     }
 
-fun <A, B> Program<A>.map(f: (A) -> B): Program<B> = flatMap { Program.Done(f(it)) }
+fun <A, B> Program<A>.map(f: (A) -> B): Program<B> =
+    when (this) {
+        is Program.Done -> Program.Done(f(this.value))
+        is Program.Suspended<*, *> -> {
+            val suspended = this as Program.Suspended<Erased, A>
+            Program.Suspended(suspended.effect, suspended.pipeline.then { Program.Done(f(it)) })
+        }
+    }
 
 private val IDENTITY_STEP =
     Pipeline.Step<Erased, Erased> {
