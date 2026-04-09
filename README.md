@@ -4,6 +4,11 @@ Extensible Effects for Kotlin, based on [Freer Monads, More Extensible Effects](
 
 Programs are pure data structures that describe computations with effects. Effects are handled by composable interpreters that can be stacked, reordered, and swapped — separating *what* a program does from *how* it's executed.
 
+Running main.kt:
+```sh
+kotlinc -include-runtime -d /tmp/ffree.jar $(find src -name '*.kt') && java -jar /tmp/ffree.jar
+```
+
 ## Quick Example
 
 ### 1. Define an effect
