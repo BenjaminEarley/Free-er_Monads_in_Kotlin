@@ -1,4 +1,4 @@
-/**
+/*
  * Performance benchmark for the type-aligned queue (Pipeline).
  *
  * The paper "Freer Monads, More Extensible Effects" (Kiselyov & Ishii) solves
@@ -12,6 +12,14 @@
  * This benchmark proves it: if time doubles when n doubles, it's O(n).
  * If it quadrupled, it would be O(n²).
  */
+
+import ffree.Effect
+import ffree.Program
+import ffree.flatMap
+import ffree.interpret
+import ffree.map
+import ffree.perform
+import ffree.runOrThrow
 
 sealed interface Tick<out R> : Effect<R>
 
@@ -39,6 +47,10 @@ fun main() {
     println("Without the type-aligned queue, left-associated chains will hang.")
 }
 
+// Single sample per size, so individual ratios are exposed to JIT/GC noise —
+// judge linearity by the trend across sizes, not any one row. The largest
+// left-associated sizes allocate millions of closures, so GC can dominate
+// their timings at the default heap.
 fun benchmarkSizes(run: (Int) -> Pair<Int, Double>) {
     val sizes = listOf(100_000, 200_000, 400_000, 800_000, 1_600_000, 3_200_000)
     var prevTime = 0.0
@@ -61,7 +73,11 @@ fun benchmarkSizes(run: (Int) -> Pair<Int, Double>) {
 // Left-associated: ((Done(0).flatMap(f)).flatMap(f)).flatMap(f)...
 // This is the pathological case that naive free monads handle in O(n²).
 // With the type-aligned queue, it should be O(n).
+// Construction is timed along with interpretation so both benchmarks measure
+// the same thing: buildAndRunRight's build is lazy and necessarily happens
+// during interpretation, inside its timed region.
 fun buildAndRunLeft(n: Int): Pair<Int, Double> {
+    val start = System.nanoTime()
     var program: Program<Int> = Program.Done(0)
     for (i in 1..n) {
         program =
@@ -70,7 +86,6 @@ fun buildAndRunLeft(n: Int): Pair<Int, Double> {
             }
     }
 
-    val start = System.nanoTime()
     val result =
         program
             .interpret<Tick<*>, Int> { op, resume ->

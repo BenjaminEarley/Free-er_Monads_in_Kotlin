@@ -1,16 +1,14 @@
-package effects
+package ffree.effects
 
-import Effect
-import Program
-import handleS
-import perform
+import ffree.Effect
+import ffree.Program
+import ffree.handleS
+import ffree.perform
 
-fun <A> Program<A>.runMemory(initialState: Int): Program<A> =
+fun <A> Program<A>.memory(initialState: Int): Program<A> =
     handleS<Memory<*>, Int, A>(initialState) { s, op ->
         when (op) {
-            is Recall -> s to s
-
-            // state unchanged, return state
+            is Recall -> s to s // state unchanged, return the state
             is Memorize -> op.value to Unit // new state, return Unit
         }
     }
@@ -21,7 +19,7 @@ data class Memorize(
     val value: Int,
 ) : Memory<Unit> // Put
 
-object Recall : Memory<Int> // Get
+data object Recall : Memory<Int> // Get
 
 fun memorize(value: Int) = perform(Memorize(value))
 

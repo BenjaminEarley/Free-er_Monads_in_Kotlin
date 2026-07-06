@@ -1,9 +1,9 @@
-package effects
+package ffree.effects
 
-import Effect
-import Program
-import interpret
-import perform
+import ffree.Effect
+import ffree.Program
+import ffree.interpret
+import ffree.perform
 
 fun <A> Program<A>.raise(): Program<Result<A>> =
     interpret<Error<*>, A, Result<A>>(

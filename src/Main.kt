@@ -1,17 +1,19 @@
-import effects.auditFraudCheck
-import effects.auditKVStore
-import effects.fail
-import effects.fraudCheck
-import effects.get
-import effects.io
-import effects.isFraudulent
-import effects.kvStore
-import effects.logError
-import effects.logInfo
-import effects.logger
-import effects.put
-import effects.raise
-import effects.runKVStoreAsync
+package ffree
+
+import ffree.effects.auditFraudCheck
+import ffree.effects.auditKVStore
+import ffree.effects.fail
+import ffree.effects.fraudCheck
+import ffree.effects.get
+import ffree.effects.io
+import ffree.effects.isFraudulent
+import ffree.effects.kvStore
+import ffree.effects.kvStoreAsync
+import ffree.effects.logError
+import ffree.effects.logInfo
+import ffree.effects.logger
+import ffree.effects.put
+import ffree.effects.raise
 
 suspend fun main() {
     // Initial State
@@ -36,12 +38,13 @@ suspend fun main() {
             .raise() // Handler: catch errors
             .runOrThrow()
 
-    println(result1)
+    printResult(result1)
     println("\n--- Database State After Tx 1 ---")
     println(database)
 
     println("\n--- Scenario 2: Insufficient Funds ---")
-    val programFail = transferMoney("Bob", "Alice", 9999.0)
+
+    val programFail = transferMoney("Bob", "Alice", 500.0)
 
     val result2 =
         programFail
@@ -53,7 +56,7 @@ suspend fun main() {
             .raise()
             .runOrThrow()
 
-    println(result2)
+    printResult(result2)
     println("\n--- Scenario 3: Fraud Detection ---")
     val programFraud = transferMoney("Alice", "Bob", 6000.0)
 
@@ -67,7 +70,7 @@ suspend fun main() {
             .raise()
             .runOrThrow()
 
-    println(result3)
+    printResult(result3)
 
     println("\n--- Scenario 4: Async KVStore via IO Effect ---")
     val asyncDatabase =
@@ -80,15 +83,13 @@ suspend fun main() {
         transferMoney("Alice", "Bob", 100.0)
             .auditKVStore()
             .auditFraudCheck()
-            .runKVStoreAsync(asyncDatabase) // KVStore with IO effects
-            .kvStore(database)
+            .kvStoreAsync(asyncDatabase) // KVStore with IO effects
             .fraudCheck()
             .logger()
             .raise()
-            .io() // Handles all IO effects at the edge
-            .runOrThrow()
+            .io() // Terminal: runs all IO effects at the edge, returns the value
 
-    println(result4)
+    printResult(result4)
     println("Async Database State: $asyncDatabase")
 }
 
@@ -115,7 +116,8 @@ fun transferMoney(
             fail("Insufficient funds").bind()
         }
 
-        // 4. Update Balances (Transactional Write)
+        // 4. Update Balances (two sequential writes — nothing rolls back the
+        // first if the program fails between them; see raise() in Error.kt)
         put(from, balance - amount).bind()
         val targetBal = get(to, 0.0).bind()
         put(to, targetBal + amount).bind()
@@ -123,7 +125,7 @@ fun transferMoney(
         "TX_OK"
     }
 
-private fun println(result: Result<String>) =
+private fun printResult(result: Result<String>) =
     result.fold(
         onSuccess = { println(">> Final Result: $it") },
         onFailure = { println(">> Pipeline Failed: ${it.message}") },

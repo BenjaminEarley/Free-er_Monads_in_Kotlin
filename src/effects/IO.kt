@@ -1,14 +1,20 @@
 @file:Suppress("UNCHECKED_CAST")
 
-package effects
+package ffree.effects
 
-import Effect
-import Program
-import perform
-import resume
+import ffree.Effect
+import ffree.Program
+import ffree.perform
+import ffree.resume
+import ffree.trampolineMisuse
+import java.util.concurrent.ArrayBlockingQueue
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
+import kotlin.coroutines.intrinsics.startCoroutineUninterceptedOrReturn
 
 // Handlers that need real async I/O emit IO effects via performIO { }.
-// A single suspend runIO() at the edge handles them all.
+// A single suspend io() at the edge handles them all.
 sealed interface IO<out R> : Effect<R>
 
 data class SuspendIO<R>(
@@ -17,14 +23,24 @@ data class SuspendIO<R>(
 
 fun <R> performIO(block: suspend () -> R): Program<R> = perform(SuspendIO(block))
 
-// Apply AFTER all other effect handlers have stripped their effects.
-suspend fun <A> Program<A>.io(): Program<A> {
+// Terminal suspend runner. Apply AFTER all other effect handlers have stripped
+// their effects: runs every IO thunk and returns the program's final value.
+// Threading: thunk resumptions re-enter through the ContinuationInterceptor of the
+// calling context, if any — under a coroutine dispatcher, interpretation stays on
+// that dispatcher. In interceptor-free contexts (e.g. a bare suspend main), the
+// first thunk that resumes on a foreign thread migrates the rest of interpretation
+// onto it; use ioBlocking() there instead.
+suspend fun <A> Program<A>.io(): A {
     var current: Program<A> = this
     while (true) {
         when (val c = current) {
             is Program.Done -> {
-                return c
+                return c.value
             }
+
+            is Program.Defer -> current = c.thunk()
+
+            is Program.Bounce -> trampolineMisuse()
 
             is Program.Suspended<*, *> -> {
                 val suspended = c as Program.Suspended<Any?, A>
@@ -34,8 +50,50 @@ suspend fun <A> Program<A>.io(): Program<A> {
                     current = resume(suspended.pipeline, result)
                 } else {
                     error(
-                        "runIO() encountered unhandled effect: ${effect::class.simpleName}. " +
-                            "Apply runIO() after all other effect handlers.",
+                        "io() encountered unhandled effect: ${effect::class.simpleName}. " +
+                            "Apply io() after all other effect handlers.",
+                    )
+                }
+            }
+        }
+    }
+}
+
+// Blocking edge runner for interceptor-free contexts (a plain main, a thread you
+// own): terminal, and every interpretation step runs on the calling thread. Each
+// thunk is started in place; if it suspends, the caller blocks until the completion
+// callback hands the Result across a queue — the transfer provides the
+// happens-before edge, so handler state never needs synchronization, and thunk
+// failures are rethrown here, on the caller's thread. The thunk itself may hop
+// threads internally; only interpretation is confined.
+fun <A> Program<A>.ioBlocking(): A {
+    val box = ArrayBlockingQueue<Result<Any?>>(1)
+    var current: Program<A> = this
+    while (true) {
+        when (val c = current) {
+            is Program.Done -> {
+                return c.value
+            }
+
+            is Program.Defer -> current = c.thunk()
+
+            is Program.Bounce -> trampolineMisuse()
+
+            is Program.Suspended<*, *> -> {
+                val suspended = c as Program.Suspended<Any?, A>
+                val effect = suspended.effect
+                if (effect is SuspendIO<*>) {
+                    val thunk = (effect as SuspendIO<Any?>).thunk
+                    val immediate =
+                        thunk.startCoroutineUninterceptedOrReturn(
+                            Continuation(EmptyCoroutineContext) { result -> box.put(result) },
+                        )
+                    val response = if (immediate === COROUTINE_SUSPENDED) box.take().getOrThrow() else immediate
+                    current = resume(suspended.pipeline, response)
+                } else {
+                    error(
+                        "ioBlocking() encountered unhandled effect: ${effect::class.simpleName}. " +
+                            "Apply ioBlocking() after all other effect handlers.",
                     )
                 }
             }

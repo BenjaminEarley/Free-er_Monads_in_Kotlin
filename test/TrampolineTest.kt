@@ -1,11 +1,23 @@
 /**
- * Trampoline stack-safety test.
- *
- * Tests three scenarios:
- * 1. interpret (low-level) — trampoline via direct resume
- * 2. handle (DSL) — trampoline via the Done-path optimization in ProgramDsl.kt
- * 3. handle + forwarding — handler that forwards effects past a non-matching handler
+ * Trampoline stack-safety tests. Each scenario runs N = 100,000 effects (or binds)
+ * through a differently shaped program/handler stack that could overflow the JVM
+ * stack: direct-resume trampolining, the handle DSL's Done-path optimization,
+ * effect forwarding past a non-matching handler, stateful interpretation, deferred
+ * resumes via intercept, left-associated bind chains, deep non-tail recursion, and
+ * long chains of pure binds.
  */
+
+import ffree.Effect
+import ffree.Program
+import ffree.flatMap
+import ffree.handle
+import ffree.intercept
+import ffree.interpret
+import ffree.interpretS
+import ffree.map
+import ffree.perform
+import ffree.program
+import ffree.runOrThrow
 
 sealed interface Counter<out R> : Effect<R>
 
@@ -111,7 +123,8 @@ fun main() {
                     }
                 }.runOrThrow()
 
-        assert(count == N) { "Expected $N, got $count" }
+        // check, not assert: JVM assertions are disabled unless -ea is passed
+        check(count == N) { "Expected $N, got $count" }
         count
     }
 
@@ -158,6 +171,65 @@ fun main() {
                     is Increment -> Unit
                 }
             }.runOrThrow()
+    }
+
+    test("7. deep non-tail recursion (work after a suspending bind)") {
+        // Each level does work AFTER a bind that suspends, so the remaining
+        // pipeline is concatenated N levels deep. The unwind of the innermost
+        // Done must stay iterative — nested resume closures would overflow
+        // around depth ~5K.
+        fun build(remaining: Int): Program<Int> =
+            if (remaining == 0) {
+                perform(Increment).map { 0 }
+            } else {
+                perform(Increment).flatMap { build(remaining - 1) }.map { it + 1 }
+            }
+
+        val result =
+            build(N)
+                .handle<Counter<*>, Int> { op ->
+                    when (op) {
+                        is Increment -> Unit
+                    }
+                }.runOrThrow()
+        check(result == N) { "Expected $N, got $result" }
+        result
+    }
+
+    test("8. long chains of pure (already-Done) binds") {
+        // Consecutive binds of Done programs never suspend, so the interpreter
+        // trampoline never sees them — buildProgram must consume them in a
+        // loop, both at construction time (pure-only program) and after an
+        // effectful bind (chain unrolls during interpretation).
+        val pureOnly =
+            program {
+                var count = 0
+                repeat(N) {
+                    count += Program.Done(1).bind()
+                }
+                count
+            }
+        val constructed = pureOnly.runOrThrow()
+
+        val afterEffect =
+            program {
+                perform(Increment).bind()
+                var count = 0
+                repeat(N) {
+                    count += Program.Done(1).bind()
+                }
+                count
+            }
+        val interpreted =
+            afterEffect
+                .handle<Counter<*>, Int> { op ->
+                    when (op) {
+                        is Increment -> Unit
+                    }
+                }.runOrThrow()
+
+        check(constructed == N && interpreted == N) { "Expected $N/$N, got $constructed/$interpreted" }
+        interpreted
     }
 
     println()

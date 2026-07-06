@@ -1,10 +1,10 @@
-package effects
+package ffree.effects
 
-import Effect
-import Program
-import handle
-import intercept
-import perform
+import ffree.Effect
+import ffree.Program
+import ffree.handle
+import ffree.intercept
+import ffree.perform
 
 // Pure handler: just decides if the transaction is fraudulent
 fun <A> Program<A>.fraudCheck(): Program<A> =
@@ -21,7 +21,7 @@ fun <A> Program<A>.auditFraudCheck(): Program<A> =
             is VerifyTransaction -> {
                 val isSus = proceed()
                 if (isSus == true) {
-                    perform(Log("WARN", "Flagging transaction for review...")).bind()
+                    logWarn("Flagging transaction for review...").bind()
                 }
                 isSus
             }

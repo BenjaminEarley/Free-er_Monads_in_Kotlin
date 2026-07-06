@@ -1,17 +1,25 @@
-package effects
+package ffree.effects
 
-import Effect
-import Program
-import handle
-import perform
+import ffree.Effect
+import ffree.Program
+import ffree.handle
+import ffree.perform
+
+enum class Severity(
+    internal val color: String,
+) {
+    INFO("\u001B[32m"), // green
+    WARN("\u001B[33m"), // yellow
+    ERROR("\u001B[31m"), // red
+    AUDIT("\u001B[36m"), // cyan
+}
 
 fun <A> Program<A>.logger(): Program<A> =
     handle<Logger<*>, A> { op ->
         when (op) {
             is Log -> {
-                val color = if (op.severity == "ERROR") "\u001B[31m" else "\u001B[32m"
                 val reset = "\u001B[0m"
-                println("$color[${op.severity}] ${op.msg}$reset")
+                println("${op.severity.color}[${op.severity}] ${op.msg}$reset")
             }
         }
     }
@@ -19,10 +27,14 @@ fun <A> Program<A>.logger(): Program<A> =
 sealed interface Logger<out R> : Effect<R>
 
 data class Log(
-    val severity: String,
+    val severity: Severity,
     val msg: String,
 ) : Logger<Unit>
 
-fun logInfo(msg: String) = perform(Log("INFO", msg))
+fun logInfo(msg: String) = perform(Log(Severity.INFO, msg))
 
-fun logError(msg: String) = perform(Log("ERROR", msg))
+fun logWarn(msg: String) = perform(Log(Severity.WARN, msg))
+
+fun logError(msg: String) = perform(Log(Severity.ERROR, msg))
+
+fun logAudit(msg: String) = perform(Log(Severity.AUDIT, msg))
