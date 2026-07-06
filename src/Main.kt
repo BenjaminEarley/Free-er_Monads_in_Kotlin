@@ -5,7 +5,7 @@ import ffree.effects.auditKVStore
 import ffree.effects.fail
 import ffree.effects.fraudCheck
 import ffree.effects.get
-import ffree.effects.io
+import ffree.effects.ioBlocking
 import ffree.effects.isFraudulent
 import ffree.effects.kvStore
 import ffree.effects.kvStoreAsync
@@ -15,7 +15,7 @@ import ffree.effects.logger
 import ffree.effects.put
 import ffree.effects.raise
 
-suspend fun main() {
+fun main() {
     // Initial State
     val database =
         mutableMapOf(
@@ -87,7 +87,7 @@ suspend fun main() {
             .fraudCheck()
             .logger()
             .raise()
-            .io() // Terminal: runs all IO effects at the edge, returns the value
+            .ioBlocking()
 
     printResult(result4)
     println("Async Database State: $asyncDatabase")
