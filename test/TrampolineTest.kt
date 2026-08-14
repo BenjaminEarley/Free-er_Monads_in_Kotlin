@@ -232,6 +232,49 @@ fun main() {
         interpreted
     }
 
+    test("9. long flatMap chains onto a program{} head (Defer pending queue)") {
+        // A Defer head (program{}, or any handled program) used to nest one
+        // closure per bind, overflowing around depth ~10-20K when forced. Binds
+        // now queue on the Defer's pending pipeline instead.
+        var prog: Program<Int> = program { 0 }
+        repeat(N) {
+            prog = prog.flatMap { count -> Program.Done(count + 1) }
+        }
+        val first = prog.runOrThrow()
+        val replayed = prog.runOrThrow() // pending queue is immutable — replay must match
+        check(first == N && replayed == N) { "Expected $N/$N, got $first/$replayed" }
+        first
+    }
+
+    test("10. long map chains onto a program{} head") {
+        var prog: Program<Int> = program { 0 }
+        repeat(N) {
+            prog = prog.map { it + 1 }
+        }
+        val result = prog.runOrThrow()
+        check(result == N) { "Expected $N, got $result" }
+        result
+    }
+
+    test("11. long flatMap chains onto an already-handled head") {
+        // Every applied handler returns a deferred program, so this is the same
+        // shape as test 9 reached through the public handler API.
+        var prog: Program<Int> =
+            perform(Increment)
+                .map { 0 }
+                .interpret<Counter<*>, Int> { op, resume ->
+                    when (op) {
+                        is Increment -> resume(Unit)
+                    }
+                }
+        repeat(N) {
+            prog = prog.flatMap { count -> Program.Done(count + 1) }
+        }
+        val result = prog.runOrThrow()
+        check(result == N) { "Expected $N, got $result" }
+        result
+    }
+
     println()
     println("All tests passed. No StackOverflowError.")
 }

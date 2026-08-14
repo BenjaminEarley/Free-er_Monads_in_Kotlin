@@ -4,6 +4,7 @@ package ffree.effects
 
 import ffree.Effect
 import ffree.Program
+import ffree.force
 import ffree.perform
 import ffree.resume
 import ffree.trampolineMisuse
@@ -38,7 +39,7 @@ suspend fun <A> Program<A>.io(): A {
                 return c.value
             }
 
-            is Program.Defer -> current = c.thunk()
+            is Program.Defer -> current = c.force()
 
             is Program.Bounce -> trampolineMisuse()
 
@@ -67,7 +68,6 @@ suspend fun <A> Program<A>.io(): A {
 // failures are rethrown here, on the caller's thread. The thunk itself may hop
 // threads internally; only interpretation is confined.
 fun <A> Program<A>.ioBlocking(): A {
-    val box = ArrayBlockingQueue<Result<Any?>>(1)
     var current: Program<A> = this
     while (true) {
         when (val c = current) {
@@ -75,7 +75,7 @@ fun <A> Program<A>.ioBlocking(): A {
                 return c.value
             }
 
-            is Program.Defer -> current = c.thunk()
+            is Program.Defer -> current = c.force()
 
             is Program.Bounce -> trampolineMisuse()
 
@@ -84,6 +84,10 @@ fun <A> Program<A>.ioBlocking(): A {
                 val effect = suspended.effect
                 if (effect is SuspendIO<*>) {
                     val thunk = (effect as SuspendIO<Any?>).thunk
+                    // Fresh box per thunk: a buggy thunk that resumes its continuation
+                    // twice lands the second result in an orphaned box instead of
+                    // poisoning the next thunk's handoff.
+                    val box = ArrayBlockingQueue<Result<Any?>>(1)
                     val immediate =
                         thunk.startCoroutineUninterceptedOrReturn(
                             Continuation(EmptyCoroutineContext) { result -> box.put(result) },

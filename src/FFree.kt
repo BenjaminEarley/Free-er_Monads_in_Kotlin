@@ -91,6 +91,11 @@ fun <A> Program<A>.run(): Result<A> =
 // The "Fast Type-Aligned Queue"
 // https://okmij.org/ftp/Haskell/Reflection.html
 // This represents the "Pipeline" of functions waiting to be executed.
+// Amortization note: append is O(1) and dequeue (the rotation in resume) is
+// amortized O(1) under single-shot consumption — each Join is rotated at most
+// once before being discarded. A multi-shot handler that resumes the same
+// suspension more than once re-pays the rotation per shot; the bound is
+// amortized O(1) per shot, not shared across shots.
 internal sealed class Pipeline<in Input, out Output> {
     // A single function step
     class Step<Input, Output>(
@@ -139,8 +144,13 @@ sealed class Program<out A> {
     // times — each interpretation gets a fresh underlying structure. This is what
     // makes program{} blocks pure, reusable descriptions despite being backed by
     // one-shot coroutine state machines.
+    // pending queues binds appended after this Defer was built: flatMap/map on an
+    // unforced program append here in O(1) instead of nesting a closure per bind
+    // (closure nesting consumes stack proportional to chain length when forced).
+    // force() drains it through the thunk's result.
     internal class Defer<out A>(
-        val thunk: () -> Program<A>,
+        val pending: Pipeline<Erased, Erased>? = null,
+        val thunk: () -> Program<Erased>,
     ) : Program<A>()
 
     // Internal trampoline marker: returned by a direct resume() call inside the
@@ -153,13 +163,40 @@ sealed class Program<out A> {
     }
 }
 
-// Unwrap Defer nodes until a concrete Done/Suspended program emerges.
+// Unwrap Defer nodes — draining any binds queued on them — until a concrete
+// Done/Suspended program emerges.
 @PublishedApi
-internal tailrec fun <A> Program<A>.force(): Program<A> =
-    when (this) {
-        is Program.Defer -> thunk().force()
-        else -> this
+internal fun <A> Program<A>.force(): Program<A> {
+    var current: Program<Erased> = this
+    var pending: Pipeline<Erased, Erased>? = null
+    while (true) {
+        when (val c = current) {
+            is Program.Defer -> {
+                val own = c.pending
+                if (own != null) {
+                    // c is nested inside the Defers seen so far, so its queued
+                    // binds apply before the ones already accumulated.
+                    pending = if (pending == null) own else Pipeline.Join(own, pending)
+                }
+                current = c.thunk()
+            }
+
+            is Program.Done -> {
+                val p = pending ?: return c as Program<A>
+                pending = null
+                current = resume(p, c.value)
+            }
+
+            is Program.Suspended<*, *> -> {
+                val suspended = c as Program.Suspended<Erased, Erased>
+                val p = pending ?: return c as Program<A>
+                return Program.Suspended(suspended.effect, Pipeline.Join(suspended.pipeline, p)) as Program<A>
+            }
+
+            is Program.Bounce -> trampolineMisuse()
+        }
     }
+}
 
 // Lazy entry points for interpret/interpretS: applying a handler builds a description;
 // the interpreter loop runs when a terminal operation forces it.
@@ -188,6 +225,11 @@ internal fun trampolineMisuse(): Nothing =
             "instead (e.g. bind it inside a program{} block).",
     )
 
+/**
+ * Sequence [f] after this program. Evaluation timing follows the receiver: on a
+ * [Program.Done] value, [f] runs immediately at construction; on a suspended or
+ * deferred program it is queued and runs during interpretation.
+ */
 fun <A, B> Program<A>.flatMap(f: (A) -> Program<B>): Program<B> =
     when (this) {
         is Program.Done -> {
@@ -196,12 +238,20 @@ fun <A, B> Program<A>.flatMap(f: (A) -> Program<B>): Program<B> =
 
         is Program.Suspended<*, *> -> {
             val suspended = this as Program.Suspended<Erased, A>
-            Program.Suspended(suspended.effect, suspended.pipeline.then(f))
+            // Binding on a fresh perform: replace the identity step with f directly
+            // (id-then-f = f) instead of allocating Join(IDENTITY_STEP, Step(f)).
+            val pipeline =
+                if (suspended.pipeline === IDENTITY_STEP) {
+                    Pipeline.Step(f as (Erased) -> Program<B>)
+                } else {
+                    suspended.pipeline.then(f)
+                }
+            Program.Suspended(suspended.effect, pipeline)
         }
 
         is Program.Defer -> {
-            val deferred = this
-            Program.Defer { deferred.thunk().flatMap(f) }
+            val bind = f as (Erased) -> Program<Erased>
+            Program.Defer(pending?.then(bind) ?: Pipeline.Step(bind), thunk)
         }
 
         is Program.Bounce -> {
@@ -217,12 +267,18 @@ fun <A, B> Program<A>.map(f: (A) -> B): Program<B> =
 
         is Program.Suspended<*, *> -> {
             val suspended = this as Program.Suspended<Erased, A>
-            Program.Suspended(suspended.effect, suspended.pipeline.then { Program.Done(f(it)) })
+            val pipeline =
+                if (suspended.pipeline === IDENTITY_STEP) {
+                    Pipeline.Step<Erased, B> { Program.Done(f(it as A)) }
+                } else {
+                    suspended.pipeline.then { Program.Done(f(it)) }
+                }
+            Program.Suspended(suspended.effect, pipeline)
         }
 
         is Program.Defer -> {
-            val deferred = this
-            Program.Defer { deferred.thunk().map(f) }
+            val bind = { value: Erased -> Program.Done(f(value as A)) }
+            Program.Defer(pending?.then(bind) ?: Pipeline.Step(bind), thunk)
         }
 
         is Program.Bounce -> {
@@ -333,7 +389,7 @@ internal fun <Target : Effect<*>, A, B> interpreterLoop(
             }
 
             is Program.Defer -> {
-                program = current.thunk()
+                program = current.force()
             }
 
             is Program.Bounce -> {
@@ -407,7 +463,7 @@ internal fun <Target : Effect<*>, S, A, B> interpreterLoopS(
             }
 
             is Program.Defer -> {
-                program = current.thunk()
+                program = current.force()
             }
 
             is Program.Bounce -> {
@@ -448,7 +504,12 @@ internal fun <Target : Effect<*>, S, A, B> interpreterLoopS(
                     if (next != null) directResumeDiscarded()
                     return result
                 } else {
-                    val s = state // capture for lambda
+                    // Capture the state as of this relay, not a mutable reference: a
+                    // multi-shot outer handler resumes this continuation several times,
+                    // and each shot must re-enter with the state as it was here. This
+                    // capture is what makes per-branch (backtracking) state work when a
+                    // stateful handler sits inside a multi-shot one.
+                    val s = state
                     val forwardedPipeline =
                         Pipeline.Step { response: Erased ->
                             interpreterLoopS(resume(pipeline, response), s, targetClass, transformDone, rule)

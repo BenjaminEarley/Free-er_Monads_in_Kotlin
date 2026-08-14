@@ -47,26 +47,39 @@ fun main() {
     println("Without the type-aligned queue, left-associated chains will hang.")
 }
 
-// Single sample per size, so individual ratios are exposed to JIT/GC noise —
-// judge linearity by the trend across sizes, not any one row. The largest
-// left-associated sizes allocate millions of closures, so GC can dominate
-// their timings at the default heap.
+// Each size runs `REPS` times with a GC between runs, and the median is
+// reported — a single sample can't resolve differences below ~3x here, because
+// GC dominates the largest left-associated sizes (they allocate millions of
+// closures) and swings individual runs several-fold. Judge linearity by the
+// median ratio trend across sizes.
+const val REPS = 5
+
 fun benchmarkSizes(run: (Int) -> Pair<Int, Double>) {
     val sizes = listOf(100_000, 200_000, 400_000, 800_000, 1_600_000, 3_200_000)
-    var prevTime = 0.0
+    var prevMedian = 0.0
 
     for (n in sizes) {
-        val (result, elapsed) = run(n)
-        val ratio = if (prevTime > 0) elapsed / prevTime else Double.NaN
+        var result = 0
+        val times =
+            DoubleArray(REPS) {
+                val (r, elapsed) = run(n)
+                result = r
+                System.gc()
+                elapsed
+            }
+        times.sort()
+        val median = times[REPS / 2]
+        val ratio = if (prevMedian > 0) median / prevMedian else Double.NaN
         println(
-            "n=%,10d  result=%,10d  time=%8.1f ms  ratio=%.2f".format(
+            "n=%,10d  result=%,10d  median=%8.1f ms  min=%8.1f ms  ratio=%.2f".format(
                 n,
                 result,
-                elapsed,
+                median,
+                times[0],
                 ratio,
             ),
         )
-        prevTime = elapsed
+        prevMedian = median
     }
 }
 

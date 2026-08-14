@@ -16,15 +16,32 @@ import ffree.perform
 import ffree.program
 import ffree.run
 import ffree.runOrThrow
+import ffree.effects.catchError
+import ffree.effects.fail
 import ffree.effects.io
 import ffree.effects.ioBlocking
 import ffree.effects.memorize
 import ffree.effects.memory
+import ffree.effects.memoryWithState
 import ffree.effects.performIO
+import ffree.effects.raise
 import ffree.effects.recall
+import ffree.effects.transactional
+import ffree.examples.Status
 import ffree.examples.accounting.effects.get
 import ffree.examples.accounting.effects.kvStore
 import ffree.examples.accounting.effects.put
+import ffree.examples.ask
+import ffree.examples.choose
+import ffree.examples.collectAll
+import ffree.examples.coroutine
+import ffree.examples.guard
+import ffree.examples.ifte
+import ffree.examples.local
+import ffree.examples.msplit
+import ffree.examples.once
+import ffree.examples.runReader
+import ffree.examples.yieldValue
 import kotlin.concurrent.thread
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -439,6 +456,190 @@ suspend fun main() {
             error("Expected the async failure to be rethrown")
         } catch (e: IllegalStateException) {
             check(e.message == "async boom") { "Unexpected message: ${e.message}" }
+        }
+    }
+
+    semTest("catchError substitutes the recovery program") {
+        val result =
+            program { fail("down").bind() }
+                .catchError { reason -> Program.Done("fallback:$reason") }
+                .runOrThrow()
+        check(result == "fallback:down") { "got $result" }
+    }
+
+    semTest("failure inside recovery propagates to the outer handler") {
+        val result =
+            program { fail("down").bind() }
+                .catchError { fail("worse") }
+                .raise()
+                .runOrThrow()
+        check(result.exceptionOrNull()?.message == "worse") { "got $result" }
+    }
+
+    val memThenFail =
+        program {
+            memorize(2).bind()
+            fail("boom").bind()
+        }
+
+    semTest("handler order: raise inside memory keeps state written before the failure") {
+        val (result, state) = memThenFail.raise().memoryWithState(0).runOrThrow()
+        check(result.isFailure && state == 2) { "got $result, state=$state" }
+    }
+
+    semTest("handler order: memory inside raise rolls the state back") {
+        val result = memThenFail.memoryWithState(0).raise().runOrThrow()
+        check(result.isFailure) { "got $result" }
+    }
+
+    semTest("coroutine() reifies yields as Status and resumes on demand") {
+        val gen =
+            program {
+                yieldValue(1).bind()
+                yieldValue(2).bind()
+                "end"
+            }
+        val seen = mutableListOf<Int>()
+        var status = gen.coroutine().runOrThrow()
+        while (status is Status.Yielded) {
+            seen += status.value
+            status = status.resume().runOrThrow()
+        }
+        check(seen == listOf(1, 2)) { "got $seen" }
+        check((status as Status.Finished).result == "end")
+    }
+
+    semTest("collectAll resumes one continuation once per option (multi-shot)") {
+        val prog =
+            choose(listOf(1, 2, 3)).flatMap { x ->
+                choose(listOf(10, 20)).map { y -> x * y }
+            }
+        val all = prog.collectAll().runOrThrow()
+        check(all == listOf(10, 20, 20, 40, 30, 60)) { "got $all" }
+    }
+
+    semTest("empty choose prunes the branch") {
+        val prog = choose(listOf(1, 2, 3, 4)).flatMap { x -> guard(x % 2 == 0).map { x } }
+        val all = prog.collectAll().runOrThrow()
+        check(all == listOf(2, 4)) { "got $all" }
+    }
+
+    semTest("catchError: recovery effects need handlers applied outside the catch") {
+        val failing =
+            program {
+                fail("down").bind()
+                recall().bind()
+            }
+        val recovery = { _: String -> program { memorize(9).bind(); recall().bind() } }
+
+        // A handler already applied beneath the catch never sees the recovery program
+        val beneath = failing.memory(0).catchError(recovery).run()
+        check(beneath.exceptionOrNull()?.message?.contains("Unhandled effect") == true) { "got $beneath" }
+
+        // A handler applied outside the catch handles it
+        val outside = failing.catchError(recovery).memory(0).runOrThrow()
+        check(outside == 9) { "got $outside" }
+    }
+
+    val statefulBranches =
+        choose(listOf(10, 20, 30)).flatMap { x ->
+            recall().flatMap { before ->
+                memorize(before + x).flatMap {
+                    recall().map { after -> Triple(x, before, after) }
+                }
+            }
+        }
+
+    semTest("multi-shot ordering: state inside collectAll backtracks per branch") {
+        val results = statefulBranches.memory(0).collectAll().runOrThrow()
+        val expected = listOf(Triple(10, 0, 10), Triple(20, 0, 20), Triple(30, 0, 30))
+        check(results == expected) { "got $results" }
+    }
+
+    semTest("multi-shot ordering: state outside collectAll threads globally across branches") {
+        val results = statefulBranches.collectAll().memory(0).runOrThrow()
+        val expected = listOf(Triple(10, 0, 10), Triple(20, 10, 30), Triple(30, 30, 60))
+        check(results == expected) { "got $results" }
+    }
+
+    semTest("multi-shot ordering: catchError inside recovers per branch, outside replaces all") {
+        val branches: Program<Int> =
+            choose(listOf(1, 2, 3)).flatMap { x ->
+                if (x == 2) fail("branch 2 failed") else Program.Done(x)
+            }
+
+        val perBranch = branches.catchError { Program.Done(-1) }.collectAll().runOrThrow()
+        check(perBranch == listOf(1, -1, 3)) { "got $perBranch" }
+
+        val wholeCollection = branches.collectAll().catchError { Program.Done(listOf(-1)) }.runOrThrow()
+        check(wholeCollection == listOf(-1)) { "got $wholeCollection" }
+    }
+
+    semTest("transactional: partial writes roll back on failure, commit on success") {
+        val depositThenFail =
+            program {
+                memorize(recall().bind() + 100).bind()
+                fail("validation").bind()
+                "unreachable"
+            }
+
+        val (_, leaked) = depositThenFail.raise().memoryWithState(500).runOrThrow()
+        check(leaked == 600) { "unprotected: got $leaked" }
+
+        val (_, rolledBack) = depositThenFail.transactional().raise().memoryWithState(500).runOrThrow()
+        check(rolledBack == 500) { "transactional: got $rolledBack" }
+
+        val deposit = program { memorize(recall().bind() + 100).bind(); "ok" }
+        val (ok, committed) = deposit.transactional().raise().memoryWithState(500).runOrThrow()
+        check(ok.getOrNull() == "ok" && committed == 600) { "commit: got $ok, $committed" }
+    }
+
+    semTest("reader: local overrides the environment only inside the sub-program") {
+        val greet = program { ask().bind() }
+        val combined =
+            program {
+                val inner = greet.local { it.uppercase() }.bind()
+                val outer = greet.bind()
+                inner to outer
+            }.runReader("env").runOrThrow()
+        check(combined == ("ENV" to "env")) { "got $combined" }
+    }
+
+    semTest("once commits to the first answer without exploring the rest") {
+        var explored = 0
+        val search =
+            choose(listOf(1, 2, 3)).map {
+                explored++
+                it * 10
+            }
+        val first = once(search).collectAll().runOrThrow()
+        check(first == listOf(10) && explored == 1) { "got $first, explored=$explored" }
+    }
+
+    semTest("msplit returns the first answer and a runnable rest-of-search") {
+        val split = choose(listOf(1, 2, 3)).map { it * 10 }.msplit().runOrThrow()
+        checkNotNull(split)
+        check(split.first == 10) { "got ${split.first}" }
+        val rest = split.second.collectAll().runOrThrow()
+        check(rest == listOf(20, 30)) { "got $rest" }
+    }
+
+    semTest("ifte runs then over every answer, else only when the search is empty") {
+        fun factors(n: Int) = choose((2 until n).toList()).flatMap { d -> guard(n % d == 0).map { d } }
+
+        val six = ifte(factors(6), { d -> Program.Done("d$d") }, Program.Done("prime")).collectAll().runOrThrow()
+        check(six == listOf("d2", "d3")) { "got $six" }
+
+        val seven = ifte(factors(7), { d -> Program.Done("d$d") }, Program.Done("prime")).collectAll().runOrThrow()
+        check(seven == listOf("prime")) { "got $seven" }
+    }
+
+    semTest("multi-shot resumption of a program{} suspension throws the single-shot error") {
+        try {
+            program { choose(listOf(1, 2)).bind() }.collectAll().runOrThrow()
+            error("Expected a single-shot violation")
+        } catch (e: IllegalStateException) {
+            check(e.message?.contains("single-shot") == true) { "Unexpected: ${e.message}" }
         }
     }
 

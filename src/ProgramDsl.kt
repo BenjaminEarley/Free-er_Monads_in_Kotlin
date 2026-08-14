@@ -50,7 +50,11 @@ class ProgramScope : Continuation<Any?> {
                 }
 
                 is State.Suspended -> {
-                    val program = s.program
+                    // Force the bound program first: a Defer that yields Done then takes
+                    // the pure fast path below instead of allocating a flatMap wrapper.
+                    // buildProgram only runs during interpretation, which would force the
+                    // thunk moments later in this same pass anyway.
+                    val program = s.program.force()
                     if (program is Program.Done) {
                         // Pure bind: resume in place and keep looping. Recursing here
                         // (as the flatMap path below does) overflows the stack on long
@@ -91,10 +95,23 @@ fun <A> program(block: suspend ProgramScope.() -> A): Program<A> =
         scope.buildProgram()
     }
 
+// Run a rule block eagerly to a concrete Done/Suspended program: equivalent to
+// program(block).force() without allocating the intermediate Defer. Handler rules
+// force immediately, so nothing needs the laziness; program{} keeps it for users.
+// The per-effect coroutine below is scalar-replaced by the JIT when the rule
+// returns without suspending — its measured cost is zero in that case, so there is
+// deliberately no non-suspend fast-path overload.
+@PublishedApi
+internal fun <A> runRuleBlock(block: suspend ProgramScope.() -> A): Program<A> {
+    val scope = ProgramScope()
+    block.createCoroutineUnintercepted(receiver = scope, completion = scope).resume(Unit)
+    return scope.buildProgram<A>().force()
+}
+
 /** Interpret with auto-resume: the block's return value is the effect's response. */
 inline fun <reified E : Effect<*>, A> Program<A>.handle(noinline rule: suspend ProgramScope.(E) -> Any?): Program<A> =
     interpret<E, A> { op, resume ->
-        when (val result = program { rule(op) }.force()) {
+        when (val result = runRuleBlock { rule(op) }) {
             is Program.Done -> resume(result.value)
             is Program.Suspended<*, *> -> result.flatMap { response -> resume(response) }
             else -> error("unreachable: force() leaves only Done or Suspended")
@@ -111,20 +128,24 @@ inline fun <reified E : Effect<*>, A> Program<A>.intercept(
 ): Program<A> =
     interpret<E, A> { op, resume ->
         val proceed: suspend ProgramScope.() -> Any? = { perform(op).bind() }
-        when (val result = program { rule(op, proceed) }.force()) {
+        when (val result = runRuleBlock { rule(op, proceed) }) {
             is Program.Done -> resume(result.value)
             is Program.Suspended<*, *> -> result.flatMap { response -> resume(response) }
             else -> error("unreachable: force() leaves only Done or Suspended")
         }
     }
 
-/** Stateful [handle]: the block receives the current state and returns `newState to response`. */
+/**
+ * Stateful [handle]: the block receives the current state and returns `newState to response`.
+ * Mind the pair order when the state and the response share a type — `response to newState`
+ * is equally well-typed and silently swaps the two.
+ */
 inline fun <reified E : Effect<*>, S, A> Program<A>.handleS(
     initialState: S,
     noinline rule: suspend ProgramScope.(S, E) -> Pair<S, Any?>,
 ): Program<A> =
     interpretS<E, S, A>(initialState) { s, op, resume ->
-        when (val result = program { rule(s, op) }.force()) {
+        when (val result = runRuleBlock { rule(s, op) }) {
             is Program.Done -> {
                 val (newState, response) = result.value
                 resume(newState, response)
