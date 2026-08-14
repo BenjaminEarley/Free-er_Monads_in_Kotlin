@@ -1,7 +1,8 @@
-package ffree.effects
+package ffree.examples.accounting.effects
 
 import ffree.Effect
 import ffree.Program
+import ffree.effects.performIO
 import ffree.handle
 import ffree.intercept
 import ffree.perform

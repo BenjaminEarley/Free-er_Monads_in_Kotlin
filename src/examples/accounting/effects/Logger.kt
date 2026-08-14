@@ -1,4 +1,4 @@
-package ffree.effects
+package ffree.examples.accounting.effects
 
 import ffree.Effect
 import ffree.Program

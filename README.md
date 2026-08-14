@@ -164,7 +164,7 @@ JVM exceptions are *not* part of the model: an exception thrown by a handler or 
 
 ## Performance
 
-The implementation uses a [type-aligned queue](https://okmij.org/ftp/Haskell/Reflection.html) for O(n) interpretation of both left- and right-associated bind chains (see `test/Benchmark.kt`), and a trampoline plus queue concatenation for stack safety — 100K+ effects through stacked handlers, deep non-tail recursion, and long sequential pure-bind chains all run on a constant stack (see `test/TrampolineTest.kt`). One known limit: deeply *nested* recursive `program { }` definitions that never perform an effect still consume stack proportional to nesting depth — recurse through an effect (or a hand-built lazy chain) for unbounded depth.
+The implementation uses a [type-aligned queue](https://okmij.org/ftp/Haskell/Reflection.html) for O(n) interpretation of both left- and right-associated bind chains (see `test/Benchmark.kt`), and a trampoline plus queue concatenation for stack safety — 100K+ effects through stacked handlers, deep non-tail recursion, and long sequential pure-bind chains all run on a constant stack (see `test/TrampolineTest.kt`). The demo's Scenario 5 (`src/examples/BindChainComparison.kt`) races three encodings of one left-associated bind chain: a closure-composed iteratee (O(n²)), raw `suspend` lambdas (O(n), but one-shot and opaque), and `Program` (O(n), and a replayable, interceptable value). One known limit: deeply *nested* recursive `program { }` definitions that never perform an effect still consume stack proportional to nesting depth — recurse through an effect (or a hand-built lazy chain) for unbounded depth.
 
 ## License
 
